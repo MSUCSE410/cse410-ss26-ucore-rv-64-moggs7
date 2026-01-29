@@ -4,6 +4,7 @@
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
+#include "proc.h"	// need to define TaskInfo
 
 uint64 sys_write(int fd, char *str, uint len)
 {
@@ -39,6 +40,27 @@ uint64 sys_gettimeofday(TimeVal *val, int _tz)
 /*
 * LAB1: you may need to define sys_task_info here
 */
+int sys_task_info(TaskInfo *ti) 
+{
+
+    if (!ti) return -1;	// ensure user did not enter null
+
+    struct proc *p = curr_proc();
+
+	// set task status to running
+    ti->status = Running;
+
+	// copy syscall user stats
+    for (int i = 0; i < MAX_SYSCALL_NUM; i++) {
+        ti->syscall_times[i] = p->syscall_times[i];
+    }
+
+	// uses same time logic of sys_gettimeofday
+    uint64 now = get_cycle();
+    ti->time = (now - p->start_time) * 1000 / CPU_FREQ;
+
+    return 0;
+}
 
 extern char trap_page[];
 
@@ -53,6 +75,12 @@ void syscall()
 	/*
 	* LAB1: you may need to update syscall counter for task info here
 	*/
+	// update syscall counter
+	if (id >= 0 && id < MAX_SYSCALL_NUM) 
+	{
+		curr_proc()->syscall_times[id]++;
+	}
+
 	switch (id) {
 	case SYS_write:
 		ret = sys_write(args[0], (char *)args[1], args[2]);
@@ -69,6 +97,10 @@ void syscall()
 	/*
 	* LAB1: you may need to add SYS_taskinfo case here
 	*/
+	case SYS_task_info:
+		ret = sys_task_info((TaskInfo *)args[0]);
+		break;
+
 	default:
 		ret = -1;
 		errorf("unknown syscall %d", id);
