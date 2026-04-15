@@ -4,6 +4,9 @@
 #include "trap.h"
 #include "vm.h"
 #include "queue.h"
+// Chapter 3 Addition - START
+#include "timer.h"	// need to def for get_cycle()
+// Chapter 4 Addition - END
 
 struct proc pool[NPROC];
 __attribute__((aligned(16))) char kstack[NPROC][PAGE_SIZE];
@@ -32,6 +35,12 @@ void proc_init()
 		p->state = UNUSED;
 		p->kstack = (uint64)kstack[p - pool];
 		p->trapframe = (struct trapframe *)trapframe[p - pool];
+
+		// Chapter 3 Addition - START
+		// initialize start time and syscall times 
+		p->start_time = 0;
+		memset(p->syscall_times, 0, sizeof(p->syscall_times));
+		// Chapter 3 Addition - END
 	}
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = IDLE_PID;
@@ -87,6 +96,13 @@ found:
 	memset(&p->context, 0, sizeof(p->context));
 	memset((void *)p->kstack, 0, KSTACK_SIZE);
 	memset((void *)p->trapframe, 0, TRAP_PAGE_SIZE);
+
+	// Chapter 5 Additions - START
+	// reset process slot times
+	p->start_time = 0;
+	memset(p->syscall_times, 0, sizeof(p->syscall_times));
+	// Chapter 5 Additions - END
+
 	p->context.ra = (uint64)usertrapret;
 	p->context.sp = p->kstack + KSTACK_SIZE;
 	return p;
@@ -101,23 +117,18 @@ void scheduler()
 {
 	struct proc *p;
 	for (;;) {
-		/*int has_proc = 0;
-		for (p = pool; p < &pool[NPROC]; p++) {
-			if (p->state == RUNNABLE) {
-				has_proc = 1;
-				tracef("swtich to proc %d", p - pool);
-				p->state = RUNNING;
-				current_proc = p;
-				swtch(&idle.context, &p->context);
-			}
-		}
-		if(has_proc == 0) {
-			panic("all app are over!\n");
-		}*/
 		p = fetch_task();
 		if (p == NULL) {
 			panic("all app are over!\n");
 		}
+
+		// Chapter 5 Additions - START
+		// runtime starts from the time the task is first started
+		if (p->start_time == 0) {
+			p->start_time = get_cycle();
+		}
+		// Chapter 5 Additions - END
+
 		tracef("swtich to proc %d", p - pool);
 		p->state = RUNNING;
 		current_proc = p;
@@ -214,10 +225,16 @@ int wait(int pid, int *code)
 			    (pid <= 0 || np->pid == pid)) {
 				havekids = 1;
 				if (np->state == ZOMBIE) {
+
+					// Chapter 5 Additions - START
+					// if status code is 0, do not store exit code
+					if (code != 0)
+						*code = np->exit_code;
+					// Chapter 5 Additions - END
+
 					// Found one.
-					np->state = UNUSED;
 					pid = np->pid;
-					*code = np->exit_code;
+					np->state = UNUSED;
 					return pid;
 				}
 			}
@@ -235,19 +252,35 @@ int wait(int pid, int *code)
 void exit(int code)
 {
 	struct proc *p = curr_proc();
+	// Chapter 5 Additions - START
+	struct proc *np;
+
 	p->exit_code = code;
 	debugf("proc %d exit with %d\n", p->pid, code);
-	freeproc(p);
-	if (p->parent != NULL) {
-		// Parent should `wait`
-		p->state = ZOMBIE;
-	}
+
 	// Set the `parent` of all children to NULL
-	struct proc *np;
 	for (np = pool; np < &pool[NPROC]; np++) {
 		if (np->parent == p) {
 			np->parent = NULL;
 		}
 	}
+
+	if (p->parent != NULL) {
+		// Parent should `wait`
+		// free user memory but keep PCB for reaping
+		if (p->pagetable) {
+			freepagetable(p->pagetable, p->max_page);
+			p->pagetable = 0;
+		}
+		p->max_page = 0;
+		p->ustack = 0;
+		p->state = ZOMBIE;
+	}
+	else {
+		// no parent will reap this process
+		freeproc(p);
+	}
+	// Chapter 5 Additions - END
+
 	sched();
 }

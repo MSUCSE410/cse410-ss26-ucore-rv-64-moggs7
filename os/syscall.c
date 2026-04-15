@@ -6,6 +6,15 @@
 #include "timer.h"
 #include "trap.h"
 
+// Chapter 3 Addition - START
+#include "proc.h"	// need to define TaskInfo
+#include "vm.h"
+// Chapter 3 Addition - END
+// Chapter 4 Addition - START
+#include "riscv.h"
+#include "kalloc.h"
+// Chapter 4 Addition - END
+
 uint64 sys_write(int fd, uint64 va, uint len)
 {
 	debugf("sys_write fd = %d str = %x, len = %d", fd, va, len);
@@ -48,16 +57,143 @@ uint64 sys_sched_yield()
 	return 0;
 }
 
+// Chapter 3 Addition -- START
 uint64 sys_gettimeofday(uint64 val, int _tz)
 {
+	if (val == 0) return -1;
+
 	struct proc *p = curr_proc();
+	TimeVal tv = {0};
+
 	uint64 cycle = get_cycle();
-	TimeVal t;
-	t.sec = cycle / CPU_FREQ;
-	t.usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
-	copyout(p->pagetable, val, (char *)&t, sizeof(TimeVal));
+	tv.sec = cycle / CPU_FREQ;
+	tv.usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
+
+	// write via pagetable helper
+	if (copyout(p->pagetable, (uint64)val, (char *)&tv, sizeof(tv)) < 0) return -1;
+
 	return 0;
 }
+
+int sys_task_info(TaskInfo *ti) 
+{
+
+    if (!ti) return -1;	// ensure user did not enter null/0
+
+    struct proc *p = curr_proc();
+	TaskInfo kti;
+
+	// set task status to running
+	kti.status = Running;
+
+	// copy syscall user stats
+    for (int i = 0; i < MAX_SYSCALL_NUM; i++) {
+        kti.syscall_times[i] = p->syscall_times[i];
+    }
+
+	// uses same time logic of sys_gettimeofday
+    uint64 now = get_cycle();
+    kti.time = (now - p->start_time) * 1000 / CPU_FREQ;
+
+	if (copyout(p->pagetable, (uint64)ti, (char*)&kti, sizeof(kti)) < 0) return -1;
+
+    return 0;
+}
+// Chapter 3 Addition -- END
+
+
+// Chapter 4 Addition - START
+int sys_mmap(void *start, uint64 len, int port, int flag, int fd)
+{
+	// quit if len is 0
+	if (len == 0) return 0;
+
+	// upper limit 1 GiB
+	if (len > (1ULL << 30)) return -1;
+
+	uint64 va0 = (uint64)start;
+
+    // start must be page aligned
+    if (!PGALIGNED(va0)) return -1;
+
+    // port must only use bits [0..2]
+    if ((port & ~0x7) != 0) return -1;
+
+    // port must not be 0 (meaningless mapping)
+    if ((port & 0x7) == 0) return -1;
+
+    struct proc *p = curr_proc();
+
+    // round length up to whole pages
+    uint64 sz = PGROUNDUP(len);
+
+    // translate port to PTE flags
+    int perm = PTE_U;
+    if (port & 0x1) perm |= PTE_R;
+    if (port & 0x2) perm |= PTE_W;
+    if (port & 0x4) perm |= PTE_X;
+
+    // error if any page alrea.dy mapped in [va0, va0+sz)
+    for (uint64 va = va0; va < va0 + sz; va += PGSIZE) 
+	{
+        if (walkaddr(p->pagetable, va) != 0) 
+		{
+            return -1;
+        }
+    }
+
+	// allocate + map each page
+	for (uint64 va = va0; va < va0 + sz; va += PGSIZE)
+	{
+		void *pa = kalloc();
+		if (pa == 0)
+		{
+			// don't reclaim on failure
+			return -1;
+		}
+		memset(pa, 0, PGSIZE);
+		if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, perm) != 0)
+		{
+			// don't reclaim on failure
+			return -1;
+		}
+	}
+	return 0;
+}
+
+int sys_munmap(void *start, uint64 len)
+{
+	// quit if len is 0
+	if (len == 0) return 0;
+
+	// upper limit is 1 GiB
+	if (len > (1ULL << 30)) return -1;
+
+	uint64 va0 = (uint64)start;
+
+	// page align start
+	if (!PGALIGNED(va0)) return -1;
+
+	struct proc *p = curr_proc();
+
+	// round page length up to whole pages
+	uint64 sz = PGROUNDUP(len);
+
+	// if any page is unmapped in [va0, va0 + sz), error
+	for (uint64 va = va0; va < va0 + sz; va += PGSIZE)
+	{
+		if (walkaddr(p->pagetable, va) == 0)
+		{
+			return -1;
+		}
+	}
+
+	// pass number of pages
+	uvmunmap(p->pagetable, va0, sz / PGSIZE, 1);
+
+	return 0;
+}
+// Chapter 4 Addition - END
 
 uint64 sys_getpid()
 {
@@ -114,6 +250,15 @@ void syscall()
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	tracef("syscall %d args = [%x, %x, %x, %x, %x, %x]", id, args[0],
 	       args[1], args[2], args[3], args[4], args[5]);
+
+	// Chapter 3 Addition -- START
+	// update syscall counter
+	if (id >= 0 && id < MAX_SYSCALL_NUM) 
+	{
+		curr_proc()->syscall_times[id]++;
+	}
+	// Chapter 3 Addition -- END
+
 	switch (id) {
 	case SYS_write:
 		ret = sys_write(args[0], args[1], args[2]);
@@ -130,6 +275,22 @@ void syscall()
 	case SYS_gettimeofday:
 		ret = sys_gettimeofday(args[0], args[1]);
 		break;
+		
+	// Chapter 3 Addition - START
+	case SYS_task_info:
+		ret = sys_task_info((TaskInfo *)args[0]);
+		break;
+	// Chapter 3 Addition - END
+
+	// Chapter 4 Addition - START
+	case SYS_mmap:
+		ret = sys_mmap((void*)args[0], args[1], args[2], args[3], args[4]);
+		break;
+	case SYS_munmap:
+		ret = sys_munmap((void*)args[0], args[1]);
+		break;
+	// Chapter 4 Addition - END
+
 	case SYS_getpid:
 		ret = sys_getpid();
 		break;

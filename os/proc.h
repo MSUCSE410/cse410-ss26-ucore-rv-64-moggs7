@@ -7,6 +7,10 @@
 
 #define NPROC (512)
 #define FD_BUFFER_SIZE (16)
+// Chapter 3 Addition - START
+#define MAX_SYSCALL_NUM 500	/// Max sys calls
+// Chapter 3 Addition - END
+
 
 struct file;
 
@@ -42,10 +46,31 @@ struct proc {
 	struct trapframe *trapframe; // data page for trampoline.S
 	struct context context; // swtch() here to run process
 	uint64 max_page;
+
+	// Chapter 3 Additions - START
+	uint64 start_time;	// time when task is first scheduled
+	unsigned int syscall_times[MAX_SYSCALL_NUM];	// max sys call number
+	// Chapter 3 Additions - END
+
 	struct proc *parent; // Parent process
 	uint64 exit_code;
 	struct file *files[FD_BUFFER_SIZE];
 };
+
+// Chapter 3 Additions - START
+typedef enum {
+	UnInit,
+	Ready,
+	Running,
+	Exited,
+} TaskStatus;
+
+typedef struct {
+	TaskStatus status;
+	unsigned int syscall_times[MAX_SYSCALL_NUM];
+	int time;
+} TaskInfo;
+// Chapter 3 Additions - END
 
 int cpuid();
 struct proc *curr_proc();
