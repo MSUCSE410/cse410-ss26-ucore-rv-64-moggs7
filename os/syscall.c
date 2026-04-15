@@ -195,6 +195,7 @@ int sys_munmap(void *start, uint64 len)
 }
 // Chapter 4 Addition - END
 
+
 uint64 sys_getpid()
 {
 	return curr_proc()->pid;
@@ -228,16 +229,35 @@ uint64 sys_wait(int pid, uint64 va)
 	return wait(pid, code);
 }
 
+// Chapter 5 Additions - START
 uint64 sys_spawn(uint64 va)
 {
-	// TODO: your job is to complete the sys call
-	return -1;
+	/**
+	Sys call handler for spawn jobs
+		va: user virtual address pointing to string
+	 */
+
+	char name[64];	// kernel side buffer (zero-trust)
+
+	// fetch filename from user process
+	if (copyinstr(curr_proc()->pagetable, name, va, sizeof(name)) < 0)
+	{
+		return -1;
+	}
+
+	// actually spawn the process
+	return spawn(name);
 }
 
-uint64 sys_set_priority(long long prio){
-    // TODO: your job is to complete the sys call
-    return -1;
+uint64 sys_set_priority(long long prio)
+{
+	/**
+	Sys call handler for priority assignments
+	prio: higher the priority, the more often the process will run
+	 */
+    return setpriority(prio);
 }
+// Chapter 5 Additions - END
 
 
 extern char trap_page[];
@@ -306,9 +326,16 @@ void syscall()
 	case SYS_wait4:
 		ret = sys_wait(args[0], args[1]);
 		break;
+
+	// Chapter 5 Additions - START
 	case SYS_spawn:
 		ret = sys_spawn(args[0]);
 		break;
+	case SYS_setpriority:
+		ret = sys_set_priority(args[0]);
+		break;
+	// Chapter 5 Additions - END
+	
 	default:
 		ret = -1;
 		errorf("unknown syscall %d", id);

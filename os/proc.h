@@ -10,6 +10,9 @@
 // Chapter 3 Addition - START
 #define MAX_SYSCALL_NUM 500	/// Max sys calls
 // Chapter 3 Addition - END
+// Chapter 5 Addition - START
+#define BIG_STRIDE 65536
+// Chapter 5 Addition - END
 
 
 struct file;
@@ -52,6 +55,11 @@ struct proc {
 	unsigned int syscall_times[MAX_SYSCALL_NUM];	// max sys call number
 	// Chapter 3 Additions - END
 
+	// Chapter 5 Additions - START
+	int priority;
+	uint64 stride;
+	// Chapter 5 Additions - END
+
 	struct proc *parent; // Parent process
 	uint64 exit_code;
 	struct file *files[FD_BUFFER_SIZE];
@@ -88,5 +96,10 @@ struct proc *allocproc();
 int fdalloc(struct file *);
 // swtch.S
 void swtch(struct context *, struct context *);
+// Chapter 5 Additions - START
+int spawn(char *name);
+int setpriority(long long prio);
+// Chapter 5 Additions - END
+
 
 #endif // PROC_H

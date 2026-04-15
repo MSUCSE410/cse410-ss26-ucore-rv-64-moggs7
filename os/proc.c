@@ -93,6 +93,11 @@ found:
 	p->parent = NULL;
 	p->exit_code = 0;
 	p->pagetable = uvmcreate((uint64)p->trapframe);
+	// Chapter 5 Additions - START
+	// init priority and stride fields
+	p->priority = 16;
+	p->stride = 0;
+	// Chapter 5 Additions - END
 	memset(&p->context, 0, sizeof(p->context));
 	memset((void *)p->kstack, 0, KSTACK_SIZE);
 	memset((void *)p->trapframe, 0, TRAP_PAGE_SIZE);
@@ -116,23 +121,42 @@ found:
 void scheduler()
 {
 	struct proc *p;
+	struct proc *best;
+
 	for (;;) {
-		p = fetch_task();
-		if (p == NULL) {
+		best = 0;	// reset best process
+
+		// check all processes in pool for the best one
+		for (p = pool; p < &pool[NPROC]; p++)
+		{
+			if (p->state == RUNNABLE)
+			{
+				// choose new best if this is better than current best
+				if (best == 0 || p->stride < best->stride) // prioritize lower stride
+				{
+					best = p;
+				}
+			}
+		}
+
+		if (best == 0)	// no runnable processes found
+		{
 			panic("all app are over!\n");
 		}
 
-		// Chapter 5 Additions - START
-		// runtime starts from the time the task is first started
-		if (p->start_time == 0) {
-			p->start_time = get_cycle();
+		// check if process has ever been run before
+		if (best->start_time == 0)
+		{
+			best->start_time = get_cycle();
 		}
-		// Chapter 5 Additions - END
 
-		tracef("swtich to proc %d", p - pool);
-		p->state = RUNNING;
-		current_proc = p;
-		swtch(&idle.context, &p->context);
+		// increase stride after prcoess is selected 
+		best->stride += BIG_STRIDE / best->priority;
+
+		tracef("swtich to proc %d", best - pool);
+		best->state = RUNNING;
+		current_proc = best;
+		swtch(&idle.context, &best->context);
 	}
 }
 
@@ -155,7 +179,7 @@ void sched()
 void yield()
 {
 	current_proc->state = RUNNABLE;
-	add_task(current_proc);
+	// add_task(current_proc); // skipped because scheduler no longer uses queue
 	sched();
 }
 
@@ -195,8 +219,46 @@ int fork()
 	np->trapframe->a0 = 0;
 	np->parent = p;
 	np->state = RUNNABLE;
-	add_task(np);
+	// add_task(np);	// skipped because scheduler no longer uses queue
 	return np->pid;
+}
+
+int spawn(char *name)
+{
+	/**
+	Build the child as a fresh process running requested program from the start
+	*/
+	struct proc *np;
+	struct proc *p = curr_proc();
+
+	// get program id
+	int id = get_id_by_name(name);
+	if (id < 0)
+	{
+		return -1;
+	}
+
+	// allocate child process
+	np = allocproc();
+	if (np == 0)
+	{
+		return -1;
+	}
+
+	// load target program directly into child
+	loader(id, np);
+
+	// child metadata
+	np->parent = p;			// record relationship
+	np->state = RUNNABLE;	// mark as runnable
+
+	// mirror child-side convention from fork & set child's return register to 0
+    np->trapframe->a0 = 0;
+
+	// queue task and return
+    // add_task(np); 	// skipped because scheduler no longer uses queue
+    return np->pid;
+
 }
 
 int exec(char *name)
@@ -243,7 +305,7 @@ int wait(int pid, int *code)
 			return -1;
 		}
 		p->state = RUNNABLE;
-		add_task(p);
+		// add_task(p); // skipped because scheduler no longer uses queue
 		sched();
 	}
 }
@@ -283,4 +345,16 @@ void exit(int code)
 	// Chapter 5 Additions - END
 
 	sched();
+}
+
+int setpriority(long long prio)
+{
+	/**
+	Helper function to assign process priority.
+	prio: higher the number, the more often this process will run
+	*/
+    if (prio < 2) return -1;
+
+    curr_proc()->priority = prio;
+    return prio;
 }
