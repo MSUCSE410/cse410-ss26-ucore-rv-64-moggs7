@@ -204,7 +204,11 @@ uint ialloc(ushort type)
 	bzero(&din, sizeof(din));
 	din.type = xshort(type);
 	din.size = xint(0);
-	// LAB4: You may want to init link count here
+
+	// Chapter 6 Addition - START
+	din.nlink = 1;	// newly created files should start w/ hardlink count 1
+	// Chapter 6 Addition - END
+	
 	winode(inum, &din);
 	return inum;
 }

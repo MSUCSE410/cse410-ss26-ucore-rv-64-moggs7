@@ -16,22 +16,22 @@ GDB = $(TOOLPREFIX)gdb
 CP = cp
 BUILDDIR = build
 C_SRCS = $(wildcard $K/*.c)
-AS_SRCS = $(wildcard $K/*.S)
+AS_SRCS = $(filter-out $K/initproc.S,$(wildcard $K/*.S))
 C_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(C_SRCS))))
 AS_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(AS_SRCS))))
 OBJS = $(C_OBJS) $(AS_OBJS)
 
 HEADER_DEP = $(addsuffix .d, $(basename $(C_OBJS)))
 
-ifeq (,$(findstring initproc.o,$(OBJS)))
-	AS_OBJS += $(BUILDDIR)/$K/initproc.o
-endif
+# ifeq (,$(findstring initproc.o,$(OBJS)))
+#      AS_OBJS += $(BUILDDIR)/$K/initproc.o
+# endif
 
 INIT_PROC ?= usershell
 
-$(K)/initproc.o: $K/initproc.S
-$(K)/initproc.S: scripts/initproc.py .FORCE
-	@$(PY) scripts/initproc.py $(INIT_PROC)
+# $(K)/initproc.o: $K/initproc.S
+# $(K)/initproc.S: scripts/initproc.py .FORCE
+#	@$(PY) scripts/initproc.py $(INIT_PROC)
 
 CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
 CFLAGS += -MD
@@ -81,7 +81,6 @@ $(HEADER_DEP): $(BUILDDIR)/$K/%.d : $K/%.c
         sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
         rm -f $@.$$$$
 
-INIT_PROC ?= usershell
 
 build: build/kernel
 
@@ -93,7 +92,7 @@ build/kernel: $(OBJS) os/kernel.ld
 
 clean:
 	rm -rf $(BUILDDIR) os/initproc.S
-	rm $(F)/*.img
+	rm -f $(F)/*.img
 
 # BOARD
 BOARD		?= qemu

@@ -4,6 +4,9 @@
 #include "trap.h"
 #include "vm.h"
 #include "queue.h"
+// Chapter 3 Addition - START
+#include "timer.h"	// need to def for get_cycle()
+// Chapter 4 Addition - END
 
 struct proc pool[NPROC];
 __attribute__((aligned(16))) char kstack[NPROC][PAGE_SIZE];
@@ -37,6 +40,13 @@ void proc_init()
 		p->state = UNUSED;
 		p->kstack = (uint64)kstack[p - pool];
 		p->trapframe = (struct trapframe *)trapframe[p - pool];
+
+		// Chapter 3 Addition - START
+		// initialize start time and syscall times 
+		p->start_time = 0;
+		memset(p->syscall_times, 0, sizeof(p->syscall_times));
+		// Chapter 3 Addition - END		
+
 	}
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = IDLE_PID;
@@ -90,10 +100,24 @@ found:
 	p->parent = NULL;
 	p->exit_code = 0;
 	p->pagetable = uvmcreate((uint64)p->trapframe);
+
+	// Chapter 5 Additions - START
+	// init priority and stride fields
+	p->priority = 16;
+	p->stride = 0;
+	// Chapter 5 Additions - END
+
 	memset(&p->context, 0, sizeof(p->context));
 	memset((void *)p->kstack, 0, KSTACK_SIZE);
 	memset((void *)p->trapframe, 0, TRAP_PAGE_SIZE);
 	memset((void *)p->files, 0, sizeof(struct file *) * FD_BUFFER_SIZE);
+
+	// Chapter 5 Additions - START
+	// reset process slot times
+	p->start_time = 0;
+	memset(p->syscall_times, 0, sizeof(p->syscall_times));
+	// Chapter 5 Additions - END
+
 	p->context.ra = (uint64)usertrapret;
 	p->context.sp = p->kstack + KSTACK_SIZE;
 	return p;
@@ -118,28 +142,43 @@ int init_stdio(struct proc *p)
 void scheduler()
 {
 	struct proc *p;
+	struct proc *best;
+
+	// Chapter 6 Additions - START
 	for (;;) {
-		/*int has_proc = 0;
-		for (p = pool; p < &pool[NPROC]; p++) {
-			if (p->state == RUNNABLE) {
-				has_proc = 1;
-				tracef("swtich to proc %d", p - pool);
-				p->state = RUNNING;
-				current_proc = p;
-				swtch(&idle.context, &p->context);
+		best = 0;	// reset best process
+		// check all processes in pool for the best one
+		for (p = pool; p < &pool[NPROC]; p++)
+		{
+			if (p->state == RUNNABLE)
+			{
+				// choose new best if this is better than current best
+				if (best == 0 || p->stride < best->stride) // prioritize lower stride
+				{
+					best = p;
+				}
 			}
 		}
-		if(has_proc == 0) {
-			panic("all app are over!\n");
-		}*/
-		p = fetch_task();
-		if (p == NULL) {
+		if (best == 0)	// no runnable processes found
+		{
 			panic("all app are over!\n");
 		}
-		tracef("swtich to proc %d", p - pool);
-		p->state = RUNNING;
-		current_proc = p;
-		swtch(&idle.context, &p->context);
+
+		// check if process has ever been run before
+		if (best->start_time == 0)
+		{
+			best->start_time = get_cycle();
+		}
+
+		// increase stride after prcoess is selected 
+		best->stride += BIG_STRIDE / best->priority;
+
+		tracef("swtich to proc %d", best - pool);
+		best->state = RUNNING;
+		current_proc = best;
+		swtch(&idle.context, &best->context);
+
+		// Chapter 6 Additions - END
 	}
 }
 
@@ -162,7 +201,6 @@ void sched()
 void yield()
 {
 	current_proc->state = RUNNABLE;
-	add_task(current_proc);
 	sched();
 }
 
@@ -180,7 +218,7 @@ void freeproc(struct proc *p)
 	if (p->pagetable)
 		freepagetable(p->pagetable, p->max_page);
 	p->pagetable = 0;
-	for (int i = 0; i > FD_BUFFER_SIZE; i++) {
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
 			fileclose(p->files[i]);
 		}
@@ -216,9 +254,57 @@ int fork()
 	np->trapframe->a0 = 0;
 	np->parent = p;
 	np->state = RUNNABLE;
-	add_task(np);
 	return np->pid;
 }
+
+// Chapter 5 Additions - START
+int spawn(char *name)
+{
+	/**
+	Build the child as a fresh process running requested program from the start
+	*/
+	struct proc *np;
+	struct proc *p = curr_proc();
+    struct inode *ip;
+
+	ip = namei(name);
+    if (ip == 0) {
+        return -1;
+    }
+    ivalid(ip);
+
+	// allocate child process
+	np = allocproc();
+    if (np == 0) {
+        iput(ip);
+        return -1;
+    }
+
+	// Chapter 6 Additions - START
+	// perform stdio setup to install fd 0,1, & 2
+	if (init_stdio(np) < 0) {
+        iput(ip);
+        freeproc(np);
+        return -1;
+    }
+	// Chapter 6 Additions - END
+
+
+    bin_loader(ip, np);
+    iput(ip);
+
+	// child metadata
+	np->parent = p;			// record relationship
+	np->state = RUNNABLE;	// mark as runnable
+
+	// mirror child-side convention from fork & set child's return register to 0
+    np->trapframe->a0 = 0;
+
+	// queue task and return
+    return np->pid;
+}
+// Chapter 5 Additions - END
+
 
 int push_argv(struct proc *p, char **argv)
 {
@@ -285,10 +371,17 @@ int wait(int pid, int *code)
 			    (pid <= 0 || np->pid == pid)) {
 				havekids = 1;
 				if (np->state == ZOMBIE) {
+
+					// Chapter 5 Additions - START
+					// if status code is 0, do not store exit code
+					if (code != 0)
+						*code = np->exit_code;
+					// Chapter 5 Additions - END
+
 					// Found one.
-					np->state = UNUSED;
 					pid = np->pid;
-					*code = np->exit_code;
+					np->state = UNUSED;
+
 					return pid;
 				}
 			}
@@ -297,7 +390,7 @@ int wait(int pid, int *code)
 			return -1;
 		}
 		p->state = RUNNABLE;
-		add_task(p);
+		// add_task(p); // skipped because scheduler no longer uses queue
 		sched();
 	}
 }
@@ -306,22 +399,50 @@ int wait(int pid, int *code)
 void exit(int code)
 {
 	struct proc *p = curr_proc();
+	// Chapter 5 Additions - START
+	struct proc *np;
+
 	p->exit_code = code;
 	debugf("proc %d exit with %d", p->pid, code);
-	freeproc(p);
-	if (p->parent != NULL) {
-		// Parent should `wait`
-		p->state = ZOMBIE;
-	}
+
 	// Set the `parent` of all children to NULL
-	struct proc *np;
 	for (np = pool; np < &pool[NPROC]; np++) {
 		if (np->parent == p) {
 			np->parent = NULL;
 		}
 	}
+
+	if (p->parent != NULL) {
+		// Parent should `wait`
+		// free user memory but keep PCB for reaping
+		if (p->pagetable) {
+			freepagetable(p->pagetable, p->max_page);
+			p->pagetable = 0;
+		}
+		p->max_page = 0;
+		p->ustack = 0;
+		p->state = ZOMBIE;
+	}
+	else {
+		// no parent will reap this process
+		freeproc(p);
+	}
+
 	sched();
 }
+
+int setpriority(long long prio)
+{
+	/**
+	Helper function to assign process priority.
+	prio: higher the number, the more often this process will run
+	*/
+    if (prio < 2) return -1;
+    curr_proc()->priority = prio;
+    return prio;
+}
+// Chapter 5 Additions - END
+
 
 int fdalloc(struct file *f)
 {

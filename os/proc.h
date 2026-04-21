@@ -6,6 +6,12 @@
 
 #define NPROC (512)
 #define FD_BUFFER_SIZE (16)
+// Chapter 3 Addition - START
+#define MAX_SYSCALL_NUM 500	/// Max sys calls
+// Chapter 3 Addition - END
+// Chapter 5 Addition - START
+#define BIG_STRIDE 65536
+// Chapter 5 Addition - END
 
 struct file;
 
@@ -41,11 +47,36 @@ struct proc {
 	struct trapframe *trapframe; // data page for trampoline.S
 	struct context context; // swtch() here to run process
 	uint64 max_page;
+
+	// Chapter 3 Additions - START
+	uint64 start_time;	// time when task is first scheduled
+	unsigned int syscall_times[MAX_SYSCALL_NUM];	// max sys call number
+	// Chapter 3 Additions - END
+
+	// Chapter 5 Additions - START
+	int priority;
+	uint64 stride;
+	// Chapter 5 Additions - END
+
 	struct proc *parent; // Parent process
 	uint64 exit_code;
 	struct file *files
 		[FD_BUFFER_SIZE]; //File descriptor table, using to record the files opened by the process
 };
+
+// Chapter 3 Additions - START
+typedef enum {
+	UnInit,
+	Ready,
+	Running,
+	Exited,
+} TaskStatus;
+typedef struct {
+	TaskStatus status;
+	unsigned int syscall_times[MAX_SYSCALL_NUM];
+	int time;
+} TaskInfo;
+// Chapter 3 Additions - END
 
 int cpuid();
 struct proc *curr_proc();
@@ -65,5 +96,11 @@ int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
 // swtch.S
 void swtch(struct context *, struct context *);
+
+// Chapter 5 Additions - START
+int spawn(char *name);
+int setpriority(long long prio);
+// Chapter 5 Additions - END
+
 
 #endif // PROC_H

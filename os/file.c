@@ -86,6 +86,7 @@ static struct inode *create(char *path, short type)
 
 	ivalid(ip);
 	iupdate(ip);
+	
 	if (dirlink(dp, path, ip->inum) < 0)
 		panic("create: dirlink");
 

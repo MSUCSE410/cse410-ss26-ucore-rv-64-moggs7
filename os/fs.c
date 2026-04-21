@@ -114,6 +114,11 @@ struct inode *ialloc(uint dev, short type)
 		if (dip->type == 0) { // a free inode
 			memset(dip, 0, sizeof(*dip));
 			dip->type = type;
+			
+			// Chapter 6 Addition - START
+			dip->nlink = 1;	// newly created files should start w/ hardlink count 1
+			// Chapter 6 Addition - END
+
 			bwrite(bp);
 			brelse(bp);
 			return iget(dev, inum);
@@ -137,6 +142,11 @@ void iupdate(struct inode *ip)
 	dip->type = ip->type;
 	dip->size = ip->size;
 	// LAB4: you may need to update link count here
+
+	// Chapter 6 Addition - START
+	dip->nlink = ip->nlink;
+	// Chapter 6 Addition - END
+
 	memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
 	bwrite(bp);
 	brelse(bp);
@@ -190,6 +200,11 @@ void ivalid(struct inode *ip)
 		ip->type = dip->type;
 		ip->size = dip->size;
 		// LAB4: You may need to get lint count here
+
+		// Chapter 6 Additions - START
+		ip->nlink = dip->nlink;
+		// Chapter 6 Additions - END
+
 		memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
 		brelse(bp);
 		ip->valid = 1;
@@ -208,7 +223,7 @@ void ivalid(struct inode *ip)
 void iput(struct inode *ip)
 {
 	// LAB4: Unmark the condition and change link count variable name (nlink) if needed
-	if (ip->ref == 1 && ip->valid && 0 /*&& ip->nlink == 0*/) {
+	if (ip->ref == 1 && ip->valid && ip->nlink == 0) {
 		// inode has no links and no other references: truncate and free.
 		itrunc(ip);
 		ip->type = 0;
@@ -428,7 +443,45 @@ int dirlink(struct inode *dp, char *name, uint inum)
 	return 0;
 }
 
-// LAB4: You may want to add dirunlink here
+// Chapter 6 Additions - START
+
+// Looks through directory entries (dirent) in directory 'dp', 
+// find the one with this filename 'name', and erase it
+int dirunlink(struct inode *dp, char *name)
+{
+	uint off;	// byte offset where current dirent lives
+	struct dirent de;	// temp dirent buffer
+
+	// loop thru every dirent
+	for (off = 0; off < dp->size; off += sizeof(de))
+	{
+		// read one entry from disk
+		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+			panic("dirunlink read");
+
+		infof("dirunlink: checking de.name=%s inum=%d target=%s\n", de.name, de.inum, name);
+
+		// check whether this dirent matches the name and is in-use
+		if (de.inum != 0 && strncmp(name, de.name, DIRSIZ) == 0)
+		{
+			// mark this dirent as unused and clear the filename
+			de.inum = 0;
+			memset(de.name, 0, DIRSIZ);	
+
+			// write modifications to this dirent
+			if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+				panic("dirunlink write");
+
+			// sucess!!
+			return 0;
+		}
+	}
+
+	// failed :(
+	return -1;
+}
+// Chapter 6 Additions - END
+
 
 //Return the inode of the root directory
 struct inode *root_dir()
